@@ -291,8 +291,9 @@ First step: diagram of our model
 
 ```{r  out.width="75%", out.height="75%", echo=FALSE }
 library(knitr)
-include_graphics(here("lectures_qmd/img/power_comparison_figure.jpeg" ))
+include_graphics(here("lectures/img/power_comparison_figure.jpeg" ))
 ```
+
 
 ## Defining our boxes/submodels {.scrollable}
 
@@ -344,7 +345,6 @@ profit_solar <- compute_profit_frompower(
 )
 
 head(profit_solar)
-
 
 
 p1=ggplot(profit_solar, aes(as.factor(year), netpre, group = year)) +
