@@ -21,6 +21,13 @@ climate variation (place and time) might influence yield
 
 Assumptions...as you work think about what these are...
 
+# my note (tree yield, climate change and variation)
+mean yield
+max yield
+minimum yield
+design a function
+**challenge** - build a model that would work for all trees function
+table 2 of the paper - bunch of equation
 
 # Assignment
 
