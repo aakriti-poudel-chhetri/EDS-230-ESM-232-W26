@@ -1,0 +1,179 @@
+---
+title: "Assignment 4: Almond Profit Model - Informal Sensitivity Analysis"
+author: "Emily Miller and Aakriti Poudel"
+date: "`r Sys.Date()`"
+format: pdf
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(purrr)
+library(ggpubr)
+library(scales)
+```
+
+## Introduction
+
+This analysis examines how uncertainty in almond price and production cost affects annual profit. We use the almond yield anomaly model from Lobell et al. (2006) combined with a simple profit model to assess sensitivity to two key economic parameters.
+
+## Methods
+
+### Model Structure
+
+The profit model calculates net profit using:
+
+-   **Almond yield anomaly** based on February minimum temperature and January precipitation
+-   **Price per ton** of almonds (\$/ton)
+-   **Production cost** per acre (\$/acre)
+-   **Baseline yield** of 1 ton/acre
+-   **Farm size** of 1 acre
+
+### Sensitivity Analysis Parameters
+
+We vary two parameters simultaneously:
+
+1.  **Price**: Uniform distribution from \$4,000-6,000 per ton (±20% around \$5,000 baseline)
+2.  **Cost**: Normal distribution with mean \$3,000/acre and standard deviation \$500/acre
+
+We generate 200 parameter combinations and run the model for each.
+
+## Load Functions and Data
+
+```{r load}
+# Source the model functions
+source("Assignment3_YieldFun.R")
+source("profit.R")
+
+# Load climate data 
+clim_data <- read_delim("../../Data/clim.txt", delim = " ")
+```
+
+## Sensitivity Analysis
+
+```{r sensitivity}
+# Set number of samples
+nsamples <- 200
+
+# Generate parameter samples
+set.seed(123)  # for reproducibility
+
+# Price varies uniformly ±20% around baseline
+price <- runif(n = nsamples, min = 4000, max = 6000)
+
+# Cost varies normally around mean
+cost <- rnorm(mean = 3000, sd = 500, n = nsamples)
+
+# Combine parameters into dataframe
+parms <- data.frame(price = price, cost = cost)
+
+# Add parameter ID for tracking
+parms$parm_id <- as.character(1:nrow(parms))
+
+# Run model for all parameter combinations using pmap
+results <- parms %>% 
+  select(price, cost) %>%
+  pmap(profit, 
+       clim = clim_data,
+       actual_yield = 1,
+       acres = 1)
+
+# Check first result structure
+results[[1]] %>% head()
+```
+
+## Extract and Organize Results
+
+```{r extract_results}
+# Extract annual profit data with parameter IDs
+annual_profit <- map_df(results, `[`, c("year", "net_profit"), .id = "parm_id")
+
+# Join with parameter values
+annual_profit <- annual_profit %>%
+  left_join(parms, by = "parm_id") %>%
+  mutate(year = as.numeric(year),
+         net_profit = as.numeric(net_profit))
+
+# Summary statistics
+summary_stats <- annual_profit %>%
+  group_by(year) %>%
+  summarize(
+    mean_profit = mean(net_profit),
+    median_profit = median(net_profit),
+    min_profit = min(net_profit),
+    max_profit = max(net_profit)
+  )
+
+summary_stats
+```
+
+## Results
+
+### Annual Profit Variability Due to Parameter Uncertainty
+
+```{r plot_boxplot, fig.width=8, fig.height=5}
+# Boxplot of annual profit by year showing parameter uncertainty
+ggplot(annual_profit, aes(x = as.factor(year), y = net_profit, group = year)) +
+  geom_boxplot(fill = "lightblue", alpha = 0.7) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(
+    x = "Year",
+    y = "Net Profit",
+    title = "Annual Almond Profit Variability Across Parameter Uncertainty"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Interpretation
+
+This plot helps us understand how profit uncertainty scales with profitability. In 1995, the box spans several hundred million dollars, indicating massive uncertainty when yields are high. In contrast, low-profit years appear as thin lines with minimal variability. This pattern shows that higher yields amplify the effects of economic uncertainty; when climate produces large yields, small differences in price create massive profit swings. In poor yield years, economic parameters matter less because there's simply less product to sell.
+
+\newpage
+
+## Additional Exploration
+
+### Visualize Individual Parameter Sensitivity
+
+```{r plot_sensitivity, fig.width=10, fig.height=4}
+# Calculate mean annual profit for each parameter set
+mean_annual_profit <- annual_profit %>%
+  group_by(parm_id) %>%
+  summarize(mean_profit = mean(net_profit)) %>%
+  left_join(parms, by = "parm_id")
+
+# Create two plots showing sensitivity to each parameter
+p1 <- ggplot(mean_annual_profit, aes(x = price, y = mean_profit, col = cost)) +
+  geom_point(alpha = 0.6) +
+  scale_color_viridis_c(labels = scales::dollar_format()) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(
+    x = "Price ($/ton)",
+    y = "Mean Annual Profit",
+    title = "Sensitivity to Price"
+  ) +
+  theme_minimal()
+
+p2 <- ggplot(mean_annual_profit, aes(x = cost, y = mean_profit, col = price)) +
+  geom_point(alpha = 0.6) +
+  scale_color_viridis_c(labels = scales::dollar_format()) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  scale_x_continuous(labels = scales::dollar_format()) +
+  labs(
+    x = "Cost ($/acre)",
+    y = "Mean Annual Profit",
+    title = "Sensitivity to Cost"
+  ) +
+  theme_minimal()
+
+# Combine plots
+ggarrange(p1, p2, ncol = 2)
+
+```
+
+-   *Price drives profit:* The left plot shows a tight linear relationship between price and mean annual profit. As price increases from \$4,000 to \$6,000 per ton, profit increases proportionally with minimal scatter
+
+-   *Cost Matters Less:* The right plot shows that production cost (x-axis) barely affects profit. The vertical position of points is determined entirely by price (color) - yellow points (high price) cluster at the top, blue-purple points (low price) at the bottom. At any given cost level, price variation creates the full range of profit outcomes.
+
+**Management Implications** Price uncertainty dominates profitability. In high-yield years, price risk becomes critical - a 20% price difference can mean hundreds of millions in profit variation. Cost management, while important, has minimal impact compared to price exposure. Producers should prioritize price hedging strategies over cost reduction efforts.
