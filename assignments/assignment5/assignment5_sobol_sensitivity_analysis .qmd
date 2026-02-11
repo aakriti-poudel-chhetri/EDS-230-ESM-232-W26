@@ -1,0 +1,176 @@
+---
+title: "Sobol Sensitivity Analysis"
+author: "Aakriti Poudel"
+format:
+  pdf:
+    embed-resources: true
+    code-fold: false
+    toc: true
+editor: visual
+---
+
+# Assignment Part 1
+
+**Write a paragraph describing how results of the sensitivity analysis reported on in the paper might contribute to understanding (or prediction) within an environmental problem solving or management context.**
+
+Title of the paper: Sobol sensitivity analysis for risk assessment of uranium in groundwater
+
+**Answer:** The paper by Kumar et al. (2020) uses Sobol sensitivity analysis to understand which input factors most influence health risk estimates from uranium contamination in groundwater. The analysis shows that uranium concentration in drinking water is the most influential parameter in the risk model, meaning that uncertainty in this variable has the largest effect on the final results. This matters because uranium levels in groundwater can vary widely from one well to another and across seasons, so if the concentration values used in the model are based on limited sampling or are not representative of actual conditions, the calculated health risk could be significantly over- or underestimated. For instance, the study found that uranium concentrations in the region ranged from 0.1 to 238.2 micrograms per liter, which is an enormous spread. Because the model output is most sensitive to this parameter, even modest errors in measuring or estimating uranium concentration could shift the hazard index from a safe level to one that exceeds health guidelines, or vice versa. The study also found that water intake rate is the second most sensitive parameter, particularly for children, and since children's drinking habits are difficult to measure precisely, uncertainty in this input adds further unreliability to risk estimates for younger populations. Therefore, findings suggest that environmental managers should prioritize improving the accuracy of uranium concentration measurements and collecting better data on actual water consumption patterns before using the model to make decisions about public health interventions.
+
+# Assignment Part 2: Atmospheric Conductance Sobol Analysis
+
+## Setup and Model Function
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(sensitivity)
+library(tidyverse)
+library(purrr)
+```
+
+## Atmospheric Conductance Model
+
+$$
+C_{at} = \frac{v_m}{6.25*{ln(\frac{z_m-z_d}{z_0})}^2}
+$$ $$
+z_d = k_d*h
+$$ $$
+z_0 = k_0*h
+$$
+
+$z_m$ is the height at which windspeed is measured - must be higher than the vegetation (cm), it is usually measured 200 cm above the vegetation
+
+$h$ is vegetation height (cm)
+
+$v$ is windspeed (cm/s)
+
+Typical values if $k_d$ and $k_o$ are 0.7 and 0.1 respectively (so use those as defaults)
+
+## Sobol Sensitivity Analysis Goal
+
+In this assignment we repeat the Sobol sensitivity analysis from class but for a different setting, where windspeeds are substantially higher and more variable AND vegetation is shorter.
+
+### Step 1: Generate parameter values using Sobol
+
+We generate two independent random samples of the four parameters using the distributions specified in the assignment:
+
+-   Windspeed $v$: normally distributed with mean of 300 cm/s (3 m/s) and standard deviation of 50 cm/s (0.5 m/s)
+-   Vegetation height $h$: somewhere between 3.5 and 5.5 m
+-   $k_d$: normally distributed with standard deviation of 1% of default (0.7)
+-   $k_o$: normally distributed with standard deviation of 1% of default (0.1)
+
+```{r sobol_parameters}
+# Source the atmospheric conductance function
+source(here::here("assignments", "assignment5", "Catm.R"))
+
+# Generate two samples from parameter distributions
+np <- 1000
+
+# ---- First sample set ----
+np <- 1000
+k_o <- rnorm(mean = 0.1, sd = 0.1 * 0.01, n = np)
+k_d <- rnorm(mean = 0.7, sd = 0.7 * 0.01, n = np)
+v <- rnorm(mean = 3, sd = 0.5, n = np)
+height <- runif(min = 3.5, max = 5.5, n = np)
+
+X1 <- cbind.data.frame(k_o, k_d, v, height = height)
+
+# ---- Second sample set ----
+k_o <- rnorm(mean = 0.1, sd = 0.1 * 0.01, n = np)
+k_d <- rnorm(mean = 0.7, sd = 0.7 * 0.01, n = np)
+v <- rnorm(mean = 3, sd = 0.5, n = np)
+height <- runif(min = 3.5, max = 5.5, n = np)
+
+X2 <- cbind.data.frame(k_o, k_d, v, height = height)
+
+# Create the Sobol sensitivity analysis object
+# We use an approach implemented by jansen
+sens_Catm_Sobol <- sobolSalt(model = NULL, X1, X2, nboot = 100)
+```
+
+### Step 2: Run the model and compute Sobol indices
+
+```{r run_model}
+# Extract the Sobol-generated parameter sets and assign column names
+parms <- as.data.frame(sens_Catm_Sobol$X)
+colnames(parms) <- colnames(X1)
+
+# Run the atmospheric conductance model for every parameter set
+res <- pmap_dbl(parms, Catm)
+
+# Tell the Sobol object about the model results
+sens_Catm_Sobol <- sensitivity::tell(sens_Catm_Sobol, res, res.names = "ga")
+
+# Main effect: Partitions variance (main effect without co-variance) - sums approximately to one
+sens_Catm_Sobol$S
+
+```
+
+### Step 3: Graph of Uncertainty in Conductance
+
+```{r uncertainty_plot, fig.width=7, fig.height=5}
+# Combine parameters and model output into a single data frame
+both <- cbind.data.frame(parms, ga = sens_Catm_Sobol$y)
+
+# Histogram showing the distribution of conductance estimates
+ggplot(both, aes(x = ga)) +
+  geom_histogram(bins = 40, fill = "#009E73", color = "white", alpha = 0.6) +
+  geom_vline(xintercept = mean(both$ga), col = "#D55E00", linewidth = 0.8, linetype = "dashed") +
+  labs(x = "Atmospheric Conductance (mm/s)",
+       y = "Count",
+       title = "Uncertainty in Conductance",
+       subtitle = "Orange dashed line shows the mean") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 12, color = "grey10"))
+```
+
+### Step 4: Compute Sobol Indices
+
+```{r sobol_indices}
+# First order (main effect) sensitivity indices
+row.names(sens_Catm_Sobol$S) <- colnames(parms)
+cat("First-Order Sensitivity Indices (Main Effect):\n")
+print(sens_Catm_Sobol$S)
+
+cat("\n")
+
+# Total effect sensitivity indices
+row.names(sens_Catm_Sobol$T) <- colnames(parms)
+cat("Total Effect Sensitivity Indices:\n")
+print(sens_Catm_Sobol$T)
+
+cat("\n")
+print(sens_Catm_Sobol)
+
+```
+
+### Step 5: Plot conductance against windspeed, colored by second most sensitive parameter
+
+Based on the total effect indices, **windspeed has the highest total effect** and **vegetation height is second**. We plot atmospheric conductance vs. windspeed and color by height.
+
+```{r scatter_plot, fig.width=8, fig.height=5}
+# Plot conductance vs windspeed, colored by height
+ggplot(both, aes(x = v, y = ga, col = height)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  scale_color_viridis_c(name = "Vegetation height (m)", option = "inferno") +
+  labs(x = "Windspeed (cm/s)",
+       y = "Atmospheric Conductance (mm/s)",
+       title = "Atmospheric Conductance vs. Windspeed",
+       subtitle = "Colored by vegetation height (2nd highest total effect)") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 12, color = "grey10")) +
+  theme(legend.title = element_text(size = 10))
+```
+
+### Step 6: Discussion
+
+**Identify how sensitivity to windspeed changed with setting.**
+
+**Answer:** In the lecture, windspeed had a mean of 2.5 m/s with a standard deviation of 0.3 m/s and vegetation was tall (9.5 to 10.5 m). In that setting, the k_d and k_o parameters had higher sensitivity indices because the tall vegetation made the turbulence parameters more important in the conductance calculation.
+
+In assignment, windspeed is higher (mean 3 m/s) and more variable (sd of 0.5 m/s), and vegetation is shorter (3.5 to 5.5 m). As a result, windspeed now dominates the sensitivity analysis. This is because windspeed directly controls the numerator of the conductance equation, and its larger standard deviation introduces more variance into the output. Meanwhile, k_d and k_o have very tight uncertainty (only 1% of their defaults), so they barely affect the results. Vegetation height has some influence because the range of 3.5 to 5.5 m creates meaningful spread in the logarithmic term.
+
+Overall, when windspeed is high and variable, it becomes the main driver of uncertainty in atmospheric conductance. The sensitivity to windspeed is much greater here than in the lecture example where windspeed was lower and less variable.

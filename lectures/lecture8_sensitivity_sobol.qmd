@@ -141,7 +141,7 @@ $v$ is windspeed (cm/s)
 
 Typical values if $k_d$ and $k_o$ are 0.7 and 0.1 respectively (so use those as defaults)
 
-## Sensitivity Anallysis Goal {.scrollable}
+## Sensitivity Analysis Goal {.scrollable}
 
 For a given forest, perform a sensitivity analysis of model predictions of conductance. Consider the sensitivity to uncertainty in the following parameters and inputs
 
