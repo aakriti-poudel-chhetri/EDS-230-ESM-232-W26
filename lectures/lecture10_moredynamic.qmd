@@ -413,4 +413,4 @@ filled.contour(resfast_fixtime$qin - resfast_fixtime$qout, xlab = "Time", ylab =
 
 **Instruction for next class!**
 
-Go through the diffusion codel
+Go through the diffusion code!
