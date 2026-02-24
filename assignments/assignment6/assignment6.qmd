@@ -26,12 +26,25 @@ You could think of the canopy closure threshold as the size of the forest at whi
 
 1.  Implement this model in R (as a differential equation)
 
+```{r}
+source(here("R/dforestgrowth.R"))
+
+dforestgrowth
+
+```
+
+
 2.  Run the model for 300 years (using the ODE solver) starting with an initial forest size of 10 kg/C, and using the following parameters:
 
 -   canopy closure threshold of 50 kgC
 -   $K$ = 250 kg C (carrying capacity)
 -   $r$= 0.01 (exponential growth rate before before canopy closure)
 -   $g$ = 2 kg/year (linear growth rate after canopy closure)
+
+```{r}
+
+```
+
 
 3.  Graph the results. Here you are graphing the trajectory with the parameters as given (e.g no uncertainty)
 
