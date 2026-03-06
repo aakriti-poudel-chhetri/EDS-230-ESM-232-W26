@@ -35,6 +35,8 @@ You could think of the canopy closure threshold as the size of the forest at whi
 # Source the forest growth differential equation model
 source(here::here("assignments/assignment6/dforestgrowth.R"))
 
+dforestgrowth
+
 ```
 
 2.  Run the model for 300 years (using the ODE solver) starting with an initial forest size of 10 kg/C, and using the following parameters:
@@ -123,7 +125,6 @@ compute_forest_metrics <- function(result) {
 }
 ```
 
-
 ```{r}
 # Create a wrapper function that runs the ODE and extracts metrics
 forest_wrapper <- function(r, g, K, closure, Cinitial, simtimes, odefunc, metricfunc) {
@@ -195,8 +196,7 @@ print(sens_C_maxforest$T)
 
 ```{r}
 # Plot metric against the most sensitive parameter
-allresp <- as.data.frame(cbind(sens_C$X, all_result))
-ggplot(allresp, aes(K, maxforest, col = g)) +
+ggplot(all_result, aes(K, maxforest, col = g)) +
   geom_point(size = 0.8) +
   labs(y = "Size of the maximum forest size (kgC)", x = "Carrying capacity K (kgC)",
        title = "Maximum forest size vs parameters") +
@@ -250,6 +250,10 @@ allresults_ec <- as.data.frame(sens_C$X) %>%
 allres_ec <- allresults_ec %>%
   map_dfr(`[`, c("maxforest", "forest100"))
 
+```
+
+
+```{r}
 # Generate a boxplot of forest size at year 100
 ggplot(allres_ec, aes(y = forest100)) +
   geom_boxplot(fill = "firebrick4", alpha = 0.6) +
@@ -259,6 +263,8 @@ ggplot(allres_ec, aes(y = forest100)) +
    theme(plot.title = element_text(face = "bold", size = 14))
 
 ```
+
+
 ```{r}
 # Sobol indices for forest size at year 100
 sens_C_forest100 <- sensitivity::tell(sens_C, allres_ec$forest100)
@@ -272,3 +278,4 @@ cat("\nTotal Sobol indices (T) for forest size at year 100:\n")
 print(sens_C_forest100$T)
 ```
 
+## Grading Rubric

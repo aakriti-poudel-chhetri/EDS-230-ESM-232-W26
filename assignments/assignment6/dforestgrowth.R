@@ -11,10 +11,10 @@
 dforestgrowth <- function(Time, C, parms) {
   
   if (C < parms$closure) {
-    # exponential growth (below canopy closure threshold)
+    # Exponential growth (below canopy closure threshold)
     dC <- parms$r * C
   } else {
-    # linear growth toward carrying capacity (at or above canopy closure threshold)
+    # Linear growth toward carrying capacity (at or above canopy closure threshold)
     dC <- parms$g * (1 - C / parms$K)
   }
   
