@@ -1,0 +1,378 @@
+---
+title: "Assignment 7 – Predator-Prey Model with Hunting"
+author: "Aakriti Poudel"
+date: March, 2026
+format: 
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    fig-width: 8
+    fig-height: 6
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 5)
+library(deSolve)
+library(tidyverse)
+```
+
+# Overview
+
+In this assignment, we add hunting to a predator-prey model to see how it affects both animal populations over time. We test different hunting levels and use a stability measure to find a hunting rate that keeps both prey and predators from dying out.
+
+# Part 1 – Building the hunting model
+
+## Model Description
+
+The base predator-prey tracks how prey and predator populations change over time. Prey grow logistically, meaning their growth slows down as they approach a maximum population size $K$ and are reduced by predation.
+
+$$\frac{d\,\text{prey}}{dt} = r_\text{prey}\!\left(1 - \frac{\text{prey}}{K}\right)\text{prey} - \alpha\,\text{prey}\cdot\text{pred}$$
+
+$$\frac{d\,\text{pred}}{dt} = \text{eff}\cdot\alpha\,\text{prey}\cdot\text{pred} - p_\text{mort}\cdot\text{pred}$$
+
+We modify the prey equation to include hunting. Each year, a fraction of the prey population is removed by hunters.
+
+$$\frac{d\,\text{prey}}{dt} = r_\text{prey}\!\left(1 - \frac{\text{prey}}{K}\right)\text{prey} - \alpha\,\text{prey}\cdot\text{pred} - H(\text{prey})$$
+
+where the harvest function $H$ is:
+
+$$H(\text{prey}) = \begin{cases} 
+\min(\text{hunt} \times \text{prey},\; \text{prey} - \text{prey}_{min}) & \text{if prey} > \text{prey}_{min} \\ 
+0 & \text{otherwise} 
+\end{cases}$$
+
+**Key safeguards:**
+  - Hunting is proportional to prey abundance — as prey numbers fall, fewer are hunted automatically.
+  
+  - Hunting stops completely when prey drops below `min_prey`, protecting the population from collapsing.
+  
+  - Hunting is capped so that prey can never be driven below `min_prey`, even at high hunting rates.
+
+
+## Source the hunting function
+
+```{r hunting-function}
+source(here::here("assignments/assignment7/lotvmodK_hunt.R"))
+
+```
+
+## Set baseline parameters
+
+```{r base-parameters}
+# Set the given parameters
+base_pars <- c(
+  rprey = 0.95, # prey intrinsic growth rate (yr^-1)
+  alpha = 0.01, # predator-prey interaction coefficient
+  eff = 0.6, # predator conversion efficiency
+  pmort = 0.4, # predator mortality rate (yr^-1)
+  K = 2000, # prey carrying capacity
+  hunt = 0.0, # hunting rate (proportion of prey harvested per year)    
+  min_prey = 200 #minimum prey population required before hunting is allowed      
+)
+
+# Initial populations and time horizon
+init_pop <- c(prey = 1000, pred = 100)
+
+# 50-year simulation, 0.1-yr steps
+times <- seq(0, 50, by = 0.1)   
+```
+
+```{r thresholds}
+# Prey stability threshold: prey below this are considered collapsed
+threshold <- 50
+# Predator threshold — lower because predators naturally cycle at much lower numbers
+pred_threshold <- 5
+```
+
+
+## Baseline run (No hunting)
+Before adding hunting, we run the model with `hunt = 0` to confirm the populations behave as expected. This gives us a reference point to compare against when hunting is introduced.
+
+```{r baseline-run}
+# Run ODE with hunt = 0 to verify model behaves as expected before adding harvest
+res_base <- ode(func = lotvmodK_hunt, y = init_pop,
+                times = times, parms = base_pars) |>
+  as.data.frame() |>
+  pivot_longer(c(prey, pred), names_to = "population", values_to = "count") |>
+  mutate(population = recode(population, prey = "Prey", pred = "Predator"))
+
+ggplot(res_base, aes(x = time, y = count, colour = population)) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = c(Prey = "darkblue", Predator = "firebrick")) +
+  labs(title = "Baseline predator-prey model with carrying capacity before hunting",
+       x = "Time (years)", y = "Population size", colour = NULL) +
+  theme_minimal(base_size = 12)
+```
+
+*Without hunting, prey and predator cycle looks stable around their equilibrium, confirming the model is correct before introducing harvest pressure.*
+
+
+
+
+# Part 2 – Stability analysis under different hunting levels
+
+## Defining a Stability metric
+
+We define stability as whether both prey and predator populations persist above minimum viable sizes **at year 50**. This model produces natural boom-bust cycles where populations crash near zero during every cycle trough — even with no hunting. Using a minimum over the last 10 years would therefore flag healthy cycling populations as unstable. What matters ecologically is whether both populations **recover and persist** by the end of the simulation.
+
+A system is considered **stable** if prey > 50 and predator > 5 at year 50. We use a lower threshold for predators (`pred_threshold = 5`) because predators naturally cycle at much lower abundances than prey in this system.
+
+> **Rationale:** We define stability as prey exceeding 50 individuals and predators exceeding 5 individuals at year 50. We use different thresholds for each species because predators naturally cycle at much lower numbers than prey — setting the same threshold of 50 for predators would incorrectly flag healthy cycling populations as unstable. This follows the assignment suggestion of maintaining a population above some value 50 years into the future. The population at year 50 tells us whether the ecosystem has survived and recovered — not whether it happened to be at a high point in its cycle.
+
+```{r stability-function}
+# Input:  ODE output data frame with columns time, prey, pred
+# Output: Tibble with prey_final and pred_final — population of each species at year 50
+stability_metric <- function(sim_df) {
+  # Extract population at the final time step (year 50)
+  final <- sim_df |> filter(time == max(time))
+  tibble(prey_final = final$prey,
+         pred_final = final$pred)
+}
+```
+
+## Exploring a range of hunting rates
+
+We run the model across a grid of hunting rates, ranging from 0% (no hunting) to 50%, and record how stable the populations are at each level.
+
+```{r hunt-grid, cache=FALSE}
+# Define hunting rates to test, 0% to 50% in steps of 2.5%
+hunt_vals <- seq(0, 0.5, by = 0.025)
+
+# Loop over each hunting rate, run the ODE model, and extract stability results
+hunt_results <- map_dfr(hunt_vals, function(h) {
+  
+  # Copy base parameters and update only the hunting rate
+  pars_h         <- base_pars
+  pars_h["hunt"] <- h
+
+  # Run the ODE; if it fails, return NULL
+  sim <- tryCatch(
+    as.data.frame(ode(lotvmodK_hunt, y = init_pop, times = times, parms = pars_h)),
+    error = function(e) NULL
+  )
+
+  # If simulation failed or prey went negative, treat as population collapse
+  if (is.null(sim) || any(sim$prey < 0, na.rm = TRUE))
+    return(tibble(hunt = h, prey_final = 0, pred_final = 0))
+
+  # Call stability metric — returns tibble with prey_final and pred_final
+  metrics <- stability_metric(sim)
+  
+  tibble(hunt       = h,
+         prey_final = metrics$prey_final,
+         pred_final = metrics$pred_final)
+})
+```
+
+### Stability metric vs. Hunting rate
+
+```{r stability-plot}
+# stable = TRUE if both species exceed minimum viable sizes at year 50
+ggplot(hunt_results, aes(x = hunt, y = prey_final)) +
+  
+  # Shade the unstable zone (below threshold) as a visual warning
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = threshold,
+           fill = "grey80", alpha = 0.6) +
+  
+  # Dashed horizontal line marks the stability threshold
+  geom_hline(yintercept = threshold, linetype = "dashed",
+             colour = "red", linewidth = 0.8) +
+  
+  # Line connecting all hunting rate results to show the overall trend
+  geom_line(linewidth = 1.1, colour = "darkblue") +
+  
+  # Color each point: stable only if BOTH prey > 50 and pred > 5 at year 50
+  geom_point(aes(colour = prey_final >= threshold & pred_final >= pred_threshold), size = 3) +
+  scale_colour_manual(values = c("TRUE" = "darkgreen", "FALSE" = "firebrick"),
+                      labels = c("TRUE" = "Stable", "FALSE" = "Unstable")) +
+  
+  # Show x-axis as percentages
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  
+  labs(title = "Effect of hunting rate on population stability",
+       subtitle = "Shaded grey area represents below stability threshold (50 individuals)",
+       x = "Annual hunting rate (proportion of prey harvested)",
+       y = "Prey population at year 50",
+       colour = NULL) +
+  theme_minimal(base_size = 12)
+```
+
+### Prey and predator populations at year 50
+
+As hunting increases, prey numbers fall directly from harvest pressure, while predators decline indirectly as their food supply shrinks. This plot shows the population of each species at year 50, allowing us to see which species drops below the stability threshold first and at what hunting rate.
+
+```{r minpop-plot}
+# Reshape to compare prey and predator final populations on the same axes
+hunt_results |>
+  pivot_longer(c(prey_final, pred_final), names_to = "pop", values_to = "final_pop") |>
+  mutate(pop = recode(pop, prey_final = "Prey", pred_final = "Predator")) |>
+  ggplot(aes(x = hunt, y = final_pop, colour = pop)) +
+  geom_hline(yintercept = threshold, linetype = "dashed", colour = "red") +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.5) +
+  scale_colour_manual(values = c(Prey = "darkblue", Predator = "firebrick")) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Prey and predator populations at year 50 by hunting rate",
+       x = "Annual hunting rate", y = "Population at year 50",
+       colour = NULL) +
+  theme_minimal(base_size = 12)
+```
+
+*Prey declines gradually with hunting pressure, but predators, dependent on prey, drop more steeply once prey falls below the level needed to sustain them.*
+
+```{r hunt-table}
+# Summary table of stability results across all hunting rates
+hunt_results |>
+  mutate(hunt  = scales::percent(hunt, accuracy = 1),
+         stable = prey_final >= threshold & pred_final >= pred_threshold) |>
+  rename(`Hunting rate`       = hunt,
+         `Prey at year 50`    = prey_final,
+         `Predator at year 50` = pred_final,
+         `Stable`             = stable) |>
+  knitr::kable(digits = 1, caption = "Prey and predator populations at year 50 across hunting rates.")
+```
+
+## Sensitivity to parameter uncertainty
+
+We don't know the exact values of ecological parameters — they vary in nature. Here we use Latin Hypercube Sampling (LHS) to test how uncertainty in rprey, alpha, eff, and pmort affects stability at three different hunting rates. LHS ensures the full range of each parameter is evenly covered across 200 random samples.
+
+```{r lhs-sensitivity, cache=FALSE}
+set.seed(42)       # for reproducibility
+n_samples <- 200   # number of random parameter combinations to test
+
+# LHS: sample each parameter independently across ±20% of its best-guess value
+# This gives 200 plausible "versions" of the ecosystem
+lhs_pars <- tibble(
+  rprey = runif(n_samples, 0.95 * 0.8, 0.95 * 1.2),  # prey growth rate
+  alpha = runif(n_samples, 0.01 * 0.8, 0.01 * 1.2),  # interaction strength
+  eff   = runif(n_samples, 0.6  * 0.8, 0.6  * 1.2),  # predator efficiency
+  pmort = runif(n_samples, 0.4  * 0.8, 0.4  * 1.2)   # predator mortality
+)
+
+# Test three hunting rates: low, medium, high harvest pressure
+hunt_test <- c(0.05, 0.15, 0.25)
+
+# For each hunting rate x each parameter sample: run model and record stability
+lhs_results <- map_dfr(hunt_test, function(h) {
+  map_dfr(seq_len(n_samples), function(i) {
+
+    # Build parameter set for this sample, keeping K and min_prey fixed
+    pars_i <- c(
+      rprey    = lhs_pars$rprey[i],
+      alpha    = lhs_pars$alpha[i],
+      eff      = lhs_pars$eff[i],
+      pmort    = lhs_pars$pmort[i],
+      K        = 2000,
+      hunt     = h,
+      min_prey = 200
+    )
+
+    # Run ODE, catch any numerical errors
+    sim <- tryCatch(
+      as.data.frame(ode(func  = lotvmodK_hunt,
+                        y     = init_pop,
+                        times = times,
+                        parms = pars_i)),
+      error = function(e) NULL
+    )
+
+    # If simulation failed, produced NaN, or went negative — treat as collapse
+    if (is.null(sim) || any(is.nan(sim$prey)) || any(sim$prey < 0))
+      return(tibble(hunt = h, sample = i, prey_final = 0, pred_final = 0))
+
+    # Call stability metric — returns tibble with prey_final and pred_final
+    metrics <- stability_metric(sim)
+
+    tibble(hunt       = h,
+           sample     = i,
+           prey_final = metrics$prey_final,
+           pred_final = metrics$pred_final)
+  })
+})
+```
+
+```{r stability-rates}
+# Flag each run as stable if both species persist above minimum viable sizes at year 50
+lhs_results <- lhs_results %>%
+  mutate(
+    hunt_label = paste0("Hunt = ", scales::percent(hunt, accuracy = 1)),
+    stable     = prey_final >= threshold & pred_final >= pred_threshold
+  )
+
+# Plot histogram of prey population at year 50 for each hunting rate
+ggplot(lhs_results, aes(x = prey_final, fill = stable)) +
+  geom_histogram(bins = 30, colour = "white", linewidth = 0.2) +
+  geom_vline(xintercept = threshold, linetype = "dashed", colour = "black") +
+  facet_wrap(~ hunt_label, ncol = 3) +
+  scale_fill_manual(values = c("TRUE" = "dodgerblue3", "FALSE" = "orangered3"),
+                    labels = c("TRUE" = "Stable", "FALSE" = "Unstable"),
+                    name = "Outcome") +
+  labs(title = "Stability distribution under parameter uncertainty",
+       subtitle = "200 LHS samples with ±20% variation in rprey, alpha, eff, pmort",
+       x = "Prey population at year 50", y = "Count") +
+  theme_minimal(base_size = 12)
+```
+
+*Each histogram shows the spread of stability outcomes across 200 parameter samples at a given hunting rate. A wider spread toward zero indicates the system is sensitive to parameter uncertainty at that hunting level.*
+
+```{r lhs-summary-table}
+# Summary table: % stable runs and median final populations at each hunting rate
+lhs_results |>
+  group_by(hunt_label) |>
+  summarise(
+    `% Stable runs`        = round(mean(stable) * 100, 1),
+    `Median prey at yr 50` = round(median(prey_final), 1),
+    `Median pred at yr 50` = round(median(pred_final), 1)
+  ) |>
+  rename(`Hunting rate` = hunt_label) |>
+  mutate(`Hunting rate` = factor(`Hunting rate`,
+                                  levels = c("Hunt = 5%", "Hunt = 15%", "Hunt = 25%"))) |>
+  arrange(`Hunting rate`) |>
+  mutate(`Hunting rate` = as.character(`Hunting rate`)) |>
+  knitr::kable(caption = "Proportion of stable runs across hunting rates (n = 200 LHS samples per rate).")
+```
+
+
+
+## Representative Population Trajectories
+
+To visualise how hunting affects the full 50-year dynamics, we plot prey and predator trajectories at three hunting rates using the best-guess parameters — a low rate (5%), a medium rate (10%), and a high rate (20%).
+
+```{r traj-plot}
+# Simulate at three hunting rates: low (5%), medium (10%), high (20%)
+traj_list <- map(c(0.05, 0.10, 0.20), function(h) {
+  p         <- base_pars
+  p["hunt"] <- h
+  sim <- as.data.frame(ode(lotvmodK_hunt, y = init_pop, times = times, parms = p))
+  sim$hunt_label <- paste0("Hunt = ", scales::percent(h, accuracy = 1))
+  sim
+})
+
+traj_df <- bind_rows(traj_list) %>%
+  pivot_longer(cols = c(prey, pred), names_to = "population", values_to = "count") %>%
+  mutate(population = recode(population, prey = "Prey", pred = "Predator"),
+         hunt_label = factor(hunt_label, levels = c("Hunt = 5%", "Hunt = 10%", "Hunt = 20%")))
+
+ggplot(traj_df, aes(x = time, y = count, colour = population)) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ hunt_label, ncol = 3) +
+  scale_colour_manual(values = c(Prey = "darkblue", Predator = "firebrick")) +
+  labs(title = "Population trajectories at three hunting rates",
+       x = "Time (years)", y = "Population size", colour = NULL) +
+  theme_minimal(base_size = 12)
+```
+
+# Conclusion and Sustainable Hunting Recommendation
+
+This analysis explored how different hunting rates affect the long term survival of both prey and predator populations over 50 years. We tested hunting rates from 0% to 50% and used population size at year 50 as our stability measure, asking whether both species were still present above the stability threshold at year 50 (prey > 50 individuals and predators > 5 individuals).
+
+The model shows that both prey and predator naturally cycle through boom-bust patterns with given parameters, populations increases and then crash low before recovering. This cycling happens even with zero hunting, which made it challenging to define stability using minimum population thresholds. Instead, we focused on whether both species survived to year 50.
+
+The model shows very low hunting rates (5%) produced the fewest stable outcomes (35% of runs). This is because at low hunting pressure, predators remain abundant and continue to over consume prey, driving both populations to crash. At moderate hunting rates (15–25%), hunting reduces prey enough to also reduce predator numbers, which dampens the extreme boom-bust cycles and leads to more consistent recovery by year 50.
+
+From the above model, I **recommend a hunting rate of no more than 15% of the current prey population per year as a sustainable target.** At this rate, nearly half of all parameter combinations we tested (47.5%) led to stable populations at year 50, the best result across all hunting levels we explored. Hunting rates above 25% removed too many prey, causing both prey and predator numbers to collapse. The proportional hunting rule also helps protect the system because hunters take a percentage rather than a fixed number, the harvest automatically drops when prey are scarce, which prevents accidental over harvesting.
